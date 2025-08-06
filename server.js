@@ -1,10 +1,10 @@
 const express = require('express');
 const cors = require('cors');
 
-// Import route handlers
-const episodesRoutes = require('./routes/episodeRoute');
-const subjectsRoutes = require('./routes/subjectRoute');
-const colorsRoutes = require('./routes/colorRoute');
+// Import pluralized route handlers
+const episodesRoutes = require('./routes/episodes');
+const subjectsRoutes = require('./routes/subjects');
+const colorsRoutes = require('./routes/colors');
 
 const app = express();
 const PORT = 3432;
@@ -29,4 +29,3 @@ app.get('/', (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
 });
-
