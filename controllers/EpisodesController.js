@@ -1,65 +1,93 @@
 const pool = require('../db');
 
 const EpisodesController = {
-  async getAllEpisodes(req, res) {
+  // Get filtered episodes by query params month, subjects, colors, and filterType (AND/OR)
+  async getFilteredEpisodes(req, res) {
     try {
-      const result = await pool.query('SELECT episode_id, title, air_date FROM episodes ORDER BY episode_id');
-      res.json(result.rows);  // Return all episodes with full details
-    } catch (error) {
-      console.error('Error fetching episodes:', error);
-      res.status(500).json({ error: 'Internal server error' });
-    }
-  },
+      const { month, subjects, colors, filterType } = req.query;
 
-  async getBySeasonEpisode(req, res) {
-    // Assuming you have season and episode columns or logic
-    // You’ll need to adjust based on your schema
-    const { season, episode } = req.params;
+      // Parse subjects and colors as arrays if provided
+      const subjectList = subjects ? subjects.split(',').map(s => s.trim()) : [];
+      const colorList = colors ? colors.split(',').map(c => c.trim()) : [];
+      const filter = filterType && filterType.toUpperCase() === 'OR' ? 'OR' : 'AND';
 
-    try {
-      // Replace with your own logic if you track season/episode in separate columns
-      const query = `
-        SELECT episode_id, title, air_date 
-        FROM episodes
-        WHERE season = $1 AND episode_number = $2
-        LIMIT 1
+      // Base SQL and params
+      let sql = `
+        SELECT DISTINCT e.episode_id, e.title, e.air_date
+        FROM episodes e
+        LEFT JOIN episode_subjects es ON e.episode_id = es.episode_id
+        LEFT JOIN subjects s ON es.subject_id = s.subject_id
+        LEFT JOIN episode_colors ec ON e.episode_id = ec.episode_id
+        LEFT JOIN colors c ON ec.color_id = c.color_id
       `;
 
-      const result = await pool.query(query, [season, episode]);
+      const conditions = [];
+      const params = [];
 
-      if (result.rows.length === 0) {
-        return res.status(404).json({ error: 'Episode not found' });
+      // Month filter: filter by month of air_date
+      if (month) {
+        params.push(month);
+        conditions.push(`EXTRACT(MONTH FROM e.air_date) = $${params.length}`);
       }
 
-      res.json(result.rows[0]);
-    } catch (error) {
-      console.error('Error fetching episode by season/episode:', error);
-      res.status(500).json({ error: 'Internal server error' });
-    }
-  },
+      // Subject filter
+      if (subjectList.length > 0) {
+        // Use ANY or all subject matches depending on filterType
+        if (filter === 'AND') {
+          // For AND, ensure all specified subjects are matched by the episode
+          conditions.push(`
+            e.episode_id IN (
+              SELECT es2.episode_id
+              FROM episode_subjects es2
+              JOIN subjects s2 ON es2.subject_id = s2.subject_id
+              WHERE s2.subject_name = ANY($${params.length + 1}::text[])
+              GROUP BY es2.episode_id
+              HAVING COUNT(DISTINCT s2.subject_name) = $${params.length + 2}
+            )
+          `);
+          params.push(subjectList);
+          params.push(subjectList.length);
+        } else {
+          // For OR, match any subject
+          params.push(subjectList);
+          conditions.push(`s.subject_name = ANY($${params.length})`);
+        }
+      }
 
-  async searchByTitle(req, res) {
-    const { title } = req.query;
-    if (!title) {
-      return res.status(400).json({ error: 'Missing title query parameter' });
-    }
+      // Color filter
+      if (colorList.length > 0) {
+        if (filter === 'AND') {
+          conditions.push(`
+            e.episode_id IN (
+              SELECT ec2.episode_id
+              FROM episode_colors ec2
+              JOIN colors c2 ON ec2.color_id = c2.color_id
+              WHERE c2.color_name = ANY($${params.length + 1}::text[])
+              GROUP BY ec2.episode_id
+              HAVING COUNT(DISTINCT c2.color_name) = $${params.length + 2}
+            )
+          `);
+          params.push(colorList);
+          params.push(colorList.length);
+        } else {
+          params.push(colorList);
+          conditions.push(`c.color_name = ANY($${params.length})`);
+        }
+      }
 
-    try {
-      const query = `
-        SELECT episode_id, title, air_date 
-        FROM episodes
-        WHERE LOWER(title) LIKE LOWER($1)
-        ORDER BY episode_id
-      `;
+      if (conditions.length > 0) {
+        sql += ' WHERE ' + conditions.join(filter === 'AND' ? ' AND ' : ' OR ');
+      }
 
-      const result = await pool.query(query, [`%${title}%`]);
+      sql += ' ORDER BY e.air_date ASC';
 
+      const result = await pool.query(sql, params);
       res.json(result.rows);
     } catch (error) {
-      console.error('Error searching episodes by title:', error);
+      console.error('Error fetching filtered episodes:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
-  },
+  }
 };
 
 module.exports = EpisodesController;
